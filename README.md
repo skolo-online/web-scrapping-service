@@ -59,7 +59,7 @@ class TenderItem(scrapy.Item):
 
 ```
 If you look at a single tender item from the page, these are the fields available:
-[Tender Item To Be Scraped](https://bertha.ams3.digitaloceanspaces.com/example_tender.png)
+![Tender Item To Be Scraped](https://bertha.ams3.digitaloceanspaces.com/example_tender.png)
 
 Then there is a button to see more information, which has pretty much the same info but with extra items and there is a button to download tender documents.
 
