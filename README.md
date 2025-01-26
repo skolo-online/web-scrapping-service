@@ -74,68 +74,74 @@ from tenders.items import TenderItem
 
 class EskomTenderSpider(scrapy.Spider):
     name = 'eskom_tenders'
-    start_urls = ['https://tenderbulletin.eskom.co.za/?pageSize=20&pageNumber=1']
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.start_page = int(getattr(self, 'page', 1))  # Start page (default to 1)
+        self.current_page = self.start_page
+        self.max_pages = self.start_page if 'page' in kwargs else 5  # Scrape only the page provided, or default to 5 pages.
+
+    def start_requests(self):
+        # Start from the specified page or page 1
+        url = f'https://tenderbulletin.eskom.co.za/?pageSize=20&pageNumber={self.current_page}'
+        yield scrapy.Request(url, self.parse)
 
     def parse(self, response):
         """
         Parses the main tender bulletin page to extract tender details and navigates to 'Read More' pages for additional information.
         """
-        # Loop through each tender block on the page
         for tender in response.css('div.tender-item'):
-            # Extract basic tender details
-            title = tender.css('h2.tender-title::text').get()
-            tender_number = tender.css('div.tender-number::text').get()
-            short_description = tender.css('div.tender-description::text').get()
-            location = tender.css('div.tender-location::text').get()
-            closing_date = tender.css('div.tender-closing-date::text').get()
+            # Create an instance of TenderItem
+            item = TenderItem()
+
+            # Populate the fields
+            item['title'] = tender.css('h2.tender-title::text').get()
+            item['tender_number'] = tender.css('div.tender-number::text').get()
+            item['short_description'] = tender.css('div.tender-description::text').get()
+            item['location'] = tender.css('div.tender-location::text').get()
+            item['closing_date'] = tender.css('div.tender-closing-date::text').get()
 
             # Extract the download link for tender documents
             download_link = tender.css('a.download-tender-documents::attr(href)').get()
             if download_link:
-                download_link = response.urljoin(download_link)
+                item['download_link'] = response.urljoin(download_link)
 
             # Extract the 'Read More' link to navigate to the detailed tender page
             read_more_link = tender.css('a.read-more::attr(href)').get()
             if read_more_link:
-                read_more_link = response.urljoin(read_more_link)
-                # Pass the extracted data to the parse_tender_details method
-                yield response.follow(read_more_link, self.parse_tender_details, meta={
-                    'title': title,
-                    'tender_number': tender_number,
-                    'short_description': short_description,
-                    'location': location,
-                    'closing_date': closing_date,
-                    'download_link': download_link
-                })
+                yield response.follow(
+                    read_more_link,
+                    self.parse_tender_details,
+                    meta={'item': item}  # Pass the partially populated item to the next method
+                )
+            else:
+                # Yield the item directly if there's no "Read More" link
+                item['company'] = 'Eskom'
+                yield item
 
-        # Pagination: Find the link to the next page and follow it
-        next_page = response.css('a.next::attr(href)').get()
-        if next_page:
-            yield response.follow(next_page, self.parse)
+        # Pagination: Stop after the specified or maximum number of pages
+        if self.current_page < self.max_pages:
+            self.current_page += 1
+            next_page_url = f'https://tenderbulletin.eskom.co.za/?pageSize=20&pageNumber={self.current_page}'
+            yield scrapy.Request(next_page_url, self.parse)
 
     def parse_tender_details(self, response):
         """
         Parses the detailed tender page to extract additional information such as contract type, target audience, and tender ID.
         """
-        # Retrieve the basic tender details from the meta data
-        item = TenderItem(
-            title=response.meta['title'],
-            tender_number=response.meta['tender_number'],
-            short_description=response.meta['short_description'],
-            location=response.meta['location'],
-            closing_date=response.meta['closing_date'],
-            download_link=response.meta['download_link'],
-            company='Eskom'  # Set the company field to 'Eskom'
-        )
+        # Retrieve the partially populated item from the meta data
+        item = response.meta['item']
 
         # Extract additional details from the detailed tender page
         item['contract_type'] = response.css('div.contract-type::text').get()
         item['target_audience'] = response.css('div.target-audience::text').get()
         item['tender_id'] = response.css('div.tender-id::text').get()
 
-        # Yield the item to the pipeline
-        yield item
+        # Set the company field (static for this example)
+        item['company'] = 'Eskom'
 
+        # Yield the fully populated item
+        yield item
 ```
 
 ## Pipelines
@@ -218,4 +224,23 @@ class PostgresPipeline:
             raise DropItem(f"Error saving item: {e}")
         return item
 
+```
+
+## Finally 
+Let us run the spider to scrap just the first page and inspect the results:
+```
+scrapy crawl eskom_tenders -o output.json -a page=1
+```
+
+Then let us save to the Database -> first add this to your settings file:
+```python
+ITEM_PIPELINES = {
+   'tenders.pipelines.PostgresPipeline': 300,
+}
+DOWNLOAD_DELAY = 1
+```
+
+and run the command
+```
+scrapy crawl eskom_tenders
 ```
