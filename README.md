@@ -473,104 +473,68 @@ class EskomTenderSpider(scrapy.Spider):
 
 ```
 
-The rendered HTML will be saved in a folder called `html_pages` and the screnshot will be saved in a folder called 'screenshots'
-
-## Pipelines
-After the data has been scrawled, it will be saved in a database - so create the following file to add it to a postgresl database:
-`tenders/pipelines.py`
-
-First install the binary:
+This code above you can run again
 ```sh
-pip install psycopg2-binary
+scrapy crawl eskom_tenders -o output_1.json -a page=1
 ```
 
+and you should get the JSON of the actual tenders in a list. You can add pipelines to process the data further, but we will leave it here for now.
+
+## Bonus Scrapper
+If you want a scrapper to just return the HTML for further processing, so you can actually build with the actual scrapper using the correct css codes, this is the minimal code below:
+
+This will work on any URL and takes in  a URL as an input. Create a new file in `tenders/spiders/fetch_html_spider.py`
 ```python
-import psycopg2
-from scrapy.exceptions import DropItem
+import scrapy
+from scrapy_playwright.page import PageMethod
 
-class PostgresPipeline:
-    """
-    Pipeline to handle the storage of scraped items into a PostgreSQL database.
-    """
+class FetchHTMLSpider(scrapy.Spider):
+    name = "fetch_html_spider"
+    allowed_domains = [] 
 
-    def open_spider(self, spider):
+    def __init__(self, url=None, *args, **kwargs):
         """
-        Initializes database connection and creates table if it doesn't exist.
-        """
-        dsn = spider.settings.get("POSTGRES_DSN")
-        self.connection = psycopg2.connect(dsn=dsn)
-        self.cursor = self.connection.cursor()
-        self.cursor.execute("""
-            CREATE TABLE IF NOT EXISTS tenders (
-                id SERIAL PRIMARY KEY,
-                title TEXT,
-                tender_number TEXT UNIQUE,
-                short_description TEXT,
-                location TEXT,
-                closing_date DATE,
-                download_link TEXT,
-                contract_type TEXT,
-                target_audience TEXT,
-                tender_id TEXT,
-                company TEXT
-            );
-        """)
-        self.connection.commit()
+        Initializes the spider with a URL provided as an argument.
 
-    def close_spider(self, spider):
+        Usage:
+            scrapy crawl fetch_html_spider -a url="https://example.com" -o output_html.json
         """
-        Closes the database connection when the spider is closed.
-        """
-        self.cursor.close()
-        self.connection.close()
+        super().__init__(*args, **kwargs)
+        if not url:
+            raise ValueError("A 'url' argument must be provided. Usage: -a url='https://example.com'")
+        self.start_urls = [url]
 
-    def process_item(self, item, spider):
+    def start_requests(self):
         """
-        Processes each item and inserts it into the database if it doesn't already exist.
+        Initiates a request to the provided URL using Playwright and waits for 20 seconds.
         """
-        try:
-            self.cursor.execute("""
-                INSERT INTO tenders (
-                    title, tender_number, short_description, location, closing_date,
-                    download_link, contract_type, target_audience, tender_id, company
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (tender_number) DO NOTHING;
-            """, (
-                item['title'],
-                item['tender_number'],
-                item['short_description'],
-                item['location'],
-                item['closing_date'],
-                item['download_link'],
-                item['contract_type'],
-                item['target_audience'],
-                item['tender_id'],
-                item['company']
-            ))
-            self.connection.commit()
-        except psycopg2.Error as e:
-            spider.logger.error(f"Error saving item: {e}")
-            raise DropItem(f"Error saving item: {e}")
-        return item
+        for url in self.start_urls:
+            yield scrapy.Request(
+                url=url,
+                callback=self.parse,
+                meta={
+                    "playwright": True,
+                    "playwright_page_methods": [
+                        # Wait for 20 seconds (12000 milliseconds)
+                        PageMethod("wait_for_timeout", 12000),
+                    ],
+                    "playwright_include_page": False,
+                },
+            )
+
+    def parse(self, response):
+        """
+        Parses the response and yields the HTML content.
+        """
+        yield {
+            'url': response.url,
+            'html_content': response.text, 
+        }
 
 ```
-Add the following to your `settings.py` file
 
-Or uncomment if you copied our code: 
-
-```python
-ITEM_PIPELINES = {
-    'tenders.pipelines.PostgresPipeline': 300,
-}
-
-# PostgreSQL Database Connection String
-POSTGRES_DSN = "postgresql://username:password@host:port/database"
+Run the code witht the command:
+```py
+scrapy crawl fetch_html_spider -a url="http://www.publicworks.gov.za/tenders.html#gsc.tab=0" -o output_html.json
 ```
-
-
-To scrap the first five pages, save to database and output json, run:
-```sh
-scrapy crawl eskom_tenders -o new_output.json
-```
-
 
